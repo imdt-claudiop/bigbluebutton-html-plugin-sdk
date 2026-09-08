@@ -15,6 +15,11 @@ DEPENDENCY_NAME=$(node -pe "require('./package.json').name")
 # Get the current version from the project's package.json
 CURRENT_VERSION=$(node -pe "require('./package.json').version")
 
+if [[ ! "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Cannot bump prerelease or non-standard version: $CURRENT_VERSION" >&2
+  exit 1
+fi
+
 # Extract the current patch version
 CURRENT_PATCH_VERSION=$(echo "$CURRENT_VERSION" | cut -d. -f3)
 
