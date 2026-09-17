@@ -231,7 +231,7 @@ To setup and run the automated tests for the plugin SDK samples, check the [test
 
 ## Releasing a New Version
 
-Releasing the SDK is a single command, run from the project root by a maintainer with publish rights on npm. It writes the new version, publishes the package, points the 23 sample projects at it, and then commits, tags and pushes the release.
+Releasing the SDK is a single command, run from the project root by a maintainer with publish rights on npm. It writes the new version, publishes the package, points the 23 sample projects at it, and then commits, tags and pushes the release. Both the commit and the tag go to the main repository's remote as named in your own clone (whatever you called it locally, not necessarily `origin`), which the branch guard has already confirmed is the main repository.
 
 Called without an argument it releases the version that follows the current one: a stable version moves to the next patch, while a pre-release moves its own counter and stays on its channel.
 
@@ -249,10 +249,12 @@ Called with a version it releases exactly that version, which is how a new pre-r
 
 The npm dist-tag follows from the version itself: a stable version is published as `latest`, and a pre-release under its own channel (`beta`, `rc`, and so on), so installing the package without asking for a tag keeps returning the stable release.
 
-Every invocation also takes `--dry-run`, which prints each step of the release, from `npm version` to the final `git push`, and ends with `[dry-run] nothing was published, committed or pushed`.
+Every invocation also takes `--dry-run`, which prints each step of the release, from `npm version` to the final push, and ends with `[dry-run] nothing was published, committed or pushed`. The push step names the remote and the branch the release will land on, so you can confirm the target before a real run:
 
 ```bash
 ./scripts/publish-version.sh 1.0.0 --dry-run
+# ...
+# [dry-run] git push --atomic upstream HEAD:refs/heads/v1.x v1.0.0
 ```
 
 Five guards stop a release before it changes anything:
@@ -278,6 +280,12 @@ PUBLISH_TO_GITHUB=false ./scripts/publish-version.sh
 ```
 
 publishes to npm without recording the release in git.
+
+The push goes to the remote your release branch tracks, over whatever URL that remote carries. If it is an `https://` URL, git asks for a username and password on the push; point the remote at ssh once to release without the prompt:
+
+```bash
+git remote set-url upstream git@github.com:bigbluebutton/bigbluebutton-html-plugin-sdk.git
+```
 
 The version arithmetic lives in `scripts/lib/version.js`, and the branch guard in `scripts/lib/check-release-branch.sh`.
 
