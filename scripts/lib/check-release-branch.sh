@@ -49,7 +49,10 @@ fi
 
 if ! UPSTREAM_REF=$(git rev-parse --abbrev-ref "$BRANCH@{upstream}" 2> /dev/null); then
     refuse "branch $BRANCH does not track a branch on any remote" \
-        "Releases leave from a release branch ($RELEASE_BRANCHES) of $MAIN_REPOSITORY."
+        "Releases leave from a release branch ($RELEASE_BRANCHES) of $MAIN_REPOSITORY. Add that remote (ssh keeps git from asking for a password) and track one of its release branches:
+  git remote add upstream git@github.com:$MAIN_REPOSITORY.git
+  git fetch upstream
+  git branch --set-upstream-to=upstream/<release-branch>"
 fi
 
 # The remote name cannot contain a slash, but the branch name can, so only the first
@@ -66,7 +69,10 @@ REMOTE_REPOSITORY=$(printf '%s' "$REMOTE_URL" | sed 's/\.git$//' | awk -F'[/:]' 
 
 if [ "$REMOTE_REPOSITORY" != "$MAIN_REPOSITORY" ]; then
     refuse "branch $BRANCH tracks $UPSTREAM_REF on $REMOTE_URL, which is not the main repository $MAIN_REPOSITORY" \
-        "Releases leave from a clone paired with $MAIN_REPOSITORY, so everyone releases the same thing."
+        "Releases leave from a clone paired with $MAIN_REPOSITORY, so everyone releases the same thing. Add that remote (ssh keeps git from asking for a password) and track one of its release branches:
+  git remote add upstream git@github.com:$MAIN_REPOSITORY.git
+  git fetch upstream
+  git branch --set-upstream-to=upstream/<release-branch>"
 fi
 
 # The branch name is untrusted input, so it is passed as data, never interpolated into source.

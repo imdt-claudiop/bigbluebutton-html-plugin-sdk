@@ -66,6 +66,16 @@ cd "$PROJECT_DIR"
 # clone stops while nothing has been changed yet.
 "$THIS_SCRIPT_PATH/lib/check-release-branch.sh" $DRY_RUN_FLAG
 
+# The guard just refused a real run unless the current branch tracks a release branch of the
+# main repository, so in a real run the tracking remote IS the main repository's remote, by
+# construction. Resolve the push target from that same tracking ref, once, before anything is
+# mutated: the remote to push to, and the branch name it carries there (not always the local
+# name). The empty fallback is only for a dry run, which continues past a guard refusal and may
+# run from a branch with no upstream at all.
+UPSTREAM_REF=$(git rev-parse --abbrev-ref '@{upstream}' 2> /dev/null) || UPSTREAM_REF=""
+RELEASE_REMOTE="${UPSTREAM_REF%%/*}"
+RELEASE_BRANCH="${UPSTREAM_REF#*/}"
+
 DEPENDENCY_NAME=$(node -pe "require('./package.json').name")
 CURRENT_VERSION=$(node -pe "require('./package.json').version")
 
@@ -149,8 +159,11 @@ if [ "$DRY_RUN_FLAG" = "--dry-run" ]; then
         echo "[dry-run] git add ${#FILES_TO_COMMIT[@]} version files (package.json/package-lock.json of the project and of the samples)"
         echo "[dry-run] git commit -m \"Bump version to $NEW_VERSION\""
         echo "[dry-run] git tag v$NEW_VERSION"
-        echo "[dry-run] git push origin v$NEW_VERSION"
-        echo "[dry-run] git push"
+        if [ -n "$RELEASE_REMOTE" ]; then
+            echo "[dry-run] git push --atomic $RELEASE_REMOTE HEAD:refs/heads/$RELEASE_BRANCH v$NEW_VERSION"
+        else
+            echo "[dry-run] the commit and tag would go to the main repository's remote, which this branch does not track"
+        fi
         # --- end point the samples at the new version, commit, tag and push to github ---
     fi
 
@@ -212,9 +225,11 @@ if [ "$PUBLISH_TO_GITHUB" = "true" ]; then
 
     git tag "v$NEW_VERSION"
 
-    git push origin "v$NEW_VERSION"
-
-    git push
+    # One atomic push, not two. A half-pushed release (the tag landed, the commit did not) is
+    # exactly the failure being fixed, so the release commit and the tag land together or not at
+    # all; it is also one credential round instead of two. Both go to the main repository's
+    # remote the guard validated, addressed by the branch name it carries there.
+    git push --atomic "$RELEASE_REMOTE" "HEAD:refs/heads/$RELEASE_BRANCH" "v$NEW_VERSION"
 
     echo "Committed, tagged and pushed v$NEW_VERSION"
     # --- end point the samples at the new version, commit, tag and push to github ---
