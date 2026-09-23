@@ -4,6 +4,8 @@
 # clone, and the URL helpers are shared with the remote resolution in publish-version.sh.
 #
 # Usage: ./scripts/lib/check-git-preconditions.sh [--dry-run]
+#
+# --dry-run reports a refusal instead of erroring; either way a refusal exits non-zero.
 
 # The owner/name a remote URL points at: drop a trailing .git, keep the last two segments.
 # Normalizes https, ssh and local-path URLs the same way.
@@ -59,18 +61,19 @@ if [ -n "$DRY_RUN_FLAG" ] && [ "$DRY_RUN_FLAG" != "--dry-run" ]; then
     exit 1
 fi
 
-# A refusal stops a real run; a dry run only reports it, so a dry run can be tried from
-# any branch or clone.
+# A refusal stops a real run; a dry run reports it and leaves the non-zero status for the
+# caller to count, so a dry run can be tried from any branch or clone.
 refuse() {
     if [ "$DRY_RUN_FLAG" = "--dry-run" ]; then
         echo "[dry-run] $1; a real run would stop here."
-        exit 0
+    else
+        echo "Error: $1."
     fi
 
-    echo "Error: $1."
     if [ -n "$2" ]; then
         echo "$2"
     fi
+
     exit 1
 }
 

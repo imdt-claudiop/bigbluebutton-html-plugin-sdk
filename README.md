@@ -255,7 +255,15 @@ Every invocation also takes `--dry-run`, which prints each step of the release, 
 ./scripts/publish-version.sh 1.0.0 --dry-run
 ```
 
-Six guards stop a release before it changes anything:
+A dry run is also how you ask whether a clone is ready to release at all. A real run stops at the first guard that fails, but a dry run keeps going, reports every guard that would stop the release in a single pass, and exits non-zero if it found any:
+
+```bash
+[dry-run] npm is not logged in, so this release cannot publish bigbluebutton-html-plugin-sdk; a real run would stop here.
+[dry-run] bigbluebutton-html-plugin-sdk@1.0.0-beta.2 is already published on npm; a real run would stop here.
+[dry-run] 2 check(s) above would stop a real run; this clone is not ready to release
+```
+
+Eight guards stop a release before it changes anything:
 
 - a branch that is not a release branch of the main repository, in sync with it: `Error: branch main tracks origin/main, which is not a release branch of bigbluebutton/bigbluebutton-html-plugin-sdk.` The main repository and its release branches are declared in `scripts/lib/release-branches.json`, so a new release line is a one-line addition there.
 - a version that is not a version: `"1.0" is not a semantic version. Expected MAJOR.MINOR.PATCH, optionally followed by a pre-release such as -beta.1.`
@@ -263,8 +271,12 @@ Six guards stop a release before it changes anything:
 - a git tag that is already taken: `Error: tag v0.1.27 already exists.`
 - a working tree with uncommitted changes: `Error: the working tree has uncommitted changes.`
 - a main repository remote that is not reachable over ssh: `Error: remote upstream is the main repository bigbluebutton/bigbluebutton-html-plugin-sdk, but its URL is not an ssh URL (...).` Releases are pushed over ssh, and the message prints the exact `git remote set-url` that points the remote at its ssh URL.
+- an npm that is not logged in: `Error: npm is not logged in, so this release cannot publish bigbluebutton-html-plugin-sdk.` Publishing is the one step that cannot be undone halfway, so the missing login is found before the version is written, not after.
+- a version the registry already has: `Error: bigbluebutton-html-plugin-sdk@1.0.0-beta.2 is already published on npm.` npm refuses a republished version anyway, but only after the build, and after `npm version` has rewritten `package.json` and the lockfile.
 
-The branch guard reads the remote tip over the network to confirm the branch is in sync, and under `--dry-run` it only reports what a real run would refuse, so a dry run still works from any branch or clone. The "not higher" and "uncommitted changes" guards belong to the npm stage: the git-only re-run described below skips them by design.
+A ninth check only warns: if the logged-in npm user is not listed as a collaborator with write access on the package, the release says so and goes on. The collaborator list holds individual grants only, so publish rights held through an organization team are real and still absent from it, and refusing on that would refuse legitimate releases.
+
+The branch guard reads the remote tip over the network to confirm the branch is in sync, and under `--dry-run` it only reports what a real run would refuse, so a dry run still works from any branch or clone. The "not higher", "uncommitted changes" and both npm guards belong to the npm stage: the git-only re-run described below skips them by design.
 
 The release is pushed to the remote that is the main repository, found by matching each remote's `owner/name` (so a fork checked out as `origin` never receives it). When more than one remote matches, the first over ssh in `git remote` order wins, and the chosen remote is named in the output. The branch commit and the tag then go up in a single atomic push, so a release can never land half on one remote and half on another.
 
@@ -284,7 +296,9 @@ PUBLISH_TO_GITHUB=false ./scripts/publish-version.sh
 
 publishes to npm without recording the release in git.
 
-The version arithmetic lives in `scripts/lib/version.js`, and the branch check and remote-URL helpers in `scripts/lib/check-git-preconditions.sh`.
+Between publishing and pointing the samples at the new version, the release waits for the registry to actually serve it: the samples install that exact version right afterwards, and a publish is not visible everywhere the instant it returns. The wait polls until npm answers, then gives it a settle time on top. `NPM_PUBLISH_WAIT_TIMEOUT` (default 600) bounds the poll and `NPM_PUBLISH_SETTLE_SECONDS` (default 120) is the settle time, both in seconds. If the budget runs out, the release stops and says to finish it with `PUBLISH_TO_NPMJS=false`, since the package is already published and must not be published twice.
+
+The version arithmetic lives in `scripts/lib/version.js`, the branch check and remote-URL helpers in `scripts/lib/check-git-preconditions.sh`, and the npm guards and the wait in `scripts/lib/npm-registry.sh`.
 
 ## API
 
