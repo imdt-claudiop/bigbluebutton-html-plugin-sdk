@@ -11,6 +11,16 @@
 # The npm dist-tag follows from the version: stable goes to "latest", a pre-release goes to its
 # own channel ("beta", "rc", ...).
 #
+# Every run starts with a preflight: the branch and clone, the version, the working tree, and npm
+# (logged in, publish rights, version not already on the registry). A real run stops at the first
+# check that fails, before anything is published or written. A dry run reports every check that
+# would stop the release in one pass and exits non-zero if any did, so it is also the command that
+# answers "is this clone ready to release?".
+#
+# After publishing, the release waits for npm to serve the new version before pointing the samples
+# at it. NPM_PUBLISH_WAIT_TIMEOUT (default 600) bounds that wait and NPM_PUBLISH_SETTLE_SECONDS
+# (default 120) is how long the run then gives npm to replicate internally, both in seconds.
+#
 # The two stages of the release can be toggled off independently:
 #
 #   PUBLISH_TO_NPMJS=false   finishes a release whose npm publish already succeeded: it accepts
@@ -34,6 +44,9 @@ PROJECT_DIR=$(realpath "$THIS_SCRIPT_PATH/..")
 # Sourced for the remote-URL helpers; executed further down as the branch check.
 # shellcheck source=lib/check-git-preconditions.sh
 . "$THIS_SCRIPT_PATH/lib/check-git-preconditions.sh"
+
+# shellcheck source=lib/npm-registry.sh
+. "$THIS_SCRIPT_PATH/lib/npm-registry.sh"
 
 # The toggles are environment overrides, not in-file switches: flipping a stage must not require
 # editing the file, because an edited script dirties the tree and the clean-tree check below
@@ -66,21 +79,29 @@ done
 
 cd "$PROJECT_DIR"
 
-# Refusal of the remote resolution: a real run stops with an error before anything is
-# published; a dry run only reports it and ends the way every dry run does.
-release_remote_refusal() {
+# A check that would stop the release, reported the same way wherever it is found: a real run
+# stops with an error before anything is published; a dry run records the finding and carries on,
+# so one pass reports everything that stands between this clone and a release.
+DRY_RUN_FINDINGS=0
+
+record_or_stop() {
+    local message="$1"
+    shift
+
     if [ "$DRY_RUN_FLAG" = "--dry-run" ]; then
-        echo "[dry-run] $1; a real run would stop here."
-        echo "$2"
-        echo "$3"
-        echo "[dry-run] nothing was published, committed or pushed"
-        exit 0
+        echo "[dry-run] $message; a real run would stop here."
+        DRY_RUN_FINDINGS=$((DRY_RUN_FINDINGS + 1))
+    else
+        echo "Error: $message."
     fi
 
-    echo "Error: $1."
-    echo "$2"
-    echo "$3"
-    exit 1
+    if [ "$#" -gt 0 ]; then
+        printf '%s\n' "$@"
+    fi
+
+    if [ "$DRY_RUN_FLAG" != "--dry-run" ]; then
+        exit 1
+    fi
 }
 
 # Picks the push target: the first remote that is the main repository over ssh, in git
@@ -94,13 +115,13 @@ resolve_release_remote() {
 
     main_repository=$(node -pe "require('$THIS_SCRIPT_PATH/lib/release-branches.json').mainRepository")
 
-    # A missing upstream refuses on a real run; a dry run goes on and still resolves the
-    # remote, leaving the branch empty for the push line to show as a placeholder.
+    # A dry run goes on after a missing upstream and still resolves the remote, leaving the
+    # branch empty for the push line to show as a placeholder.
     if upstream_ref=$(git rev-parse --abbrev-ref "@{upstream}" 2> /dev/null); then
         RELEASE_BRANCH="${upstream_ref#*/}"
-    elif [ "$DRY_RUN_FLAG" != "--dry-run" ]; then
-        echo "Error: could not resolve the branch this release is pushed to."
-        exit 1
+    else
+        record_or_stop "could not resolve the branch this release is pushed to" \
+            "The release is pushed to the branch this one tracks, so it has to track one."
     fi
 
     main_remotes=$(main_repository_remotes "$main_repository")
@@ -121,12 +142,12 @@ resolve_release_remote() {
 
     if [ -n "$first_main_remote" ]; then
         first_main_url=$(git remote get-url "$first_main_remote" 2> /dev/null || true)
-        release_remote_refusal \
+        record_or_stop \
             "remote $first_main_remote is the main repository $main_repository, but its URL is not an ssh URL ($first_main_url)" \
             "Releases are pushed over ssh, so point that remote at the ssh URL:" \
             "    git remote set-url $first_main_remote git@github.com:$main_repository.git"
     else
-        release_remote_refusal \
+        record_or_stop \
             "no remote is the main repository $main_repository" \
             "Add it as a remote over ssh:" \
             "    git remote add upstream git@github.com:$main_repository.git"
@@ -134,8 +155,15 @@ resolve_release_remote() {
 }
 
 # The branch is checked before anything else, so a release from the wrong branch or
-# clone stops while nothing has been changed yet.
-"$THIS_SCRIPT_PATH/lib/check-git-preconditions.sh" $DRY_RUN_FLAG
+# clone stops while nothing has been changed yet. It reports its own finding, so a dry run
+# only counts it and goes on to the checks below.
+if ! "$THIS_SCRIPT_PATH/lib/check-git-preconditions.sh" $DRY_RUN_FLAG; then
+    if [ "$DRY_RUN_FLAG" != "--dry-run" ]; then
+        exit 1
+    fi
+
+    DRY_RUN_FINDINGS=$((DRY_RUN_FINDINGS + 1))
+fi
 
 # Resolved by name, so a fork checked out as origin never receives the release. The npm-only
 # stage does not push and stays usable from an https clone.
@@ -173,14 +201,12 @@ DIST_TAG=$(node "$THIS_SCRIPT_PATH/lib/version.js" dist-tag "$NEW_VERSION")
 # version anyway, but it does so only after the build, and after the version was written.
 if [ "$PUBLISH_TO_NPMJS" = "true" ] \
     && [ "$(node "$THIS_SCRIPT_PATH/lib/version.js" compare "$NEW_VERSION" "$CURRENT_VERSION")" != "1" ]; then
-    echo "Error: $NEW_VERSION is not higher than the current version $CURRENT_VERSION."
-    exit 1
+    record_or_stop "$NEW_VERSION is not higher than the current version $CURRENT_VERSION"
 fi
 
 # Checked here too, so the release does not fail after the package is already on npm.
 if git rev-parse -q --verify "refs/tags/v$NEW_VERSION" > /dev/null; then
-    echo "Error: tag v$NEW_VERSION already exists."
-    exit 1
+    record_or_stop "tag v$NEW_VERSION already exists"
 fi
 
 # This script commits the version files, so unrelated changes to them would be swept into the
@@ -188,9 +214,14 @@ fi
 # are exactly what the git stage commits, since that mode exists to finish a release whose
 # publish already happened.
 if [ "$PUBLISH_TO_NPMJS" = "true" ] && [ -n "$(git status --porcelain)" ]; then
-    echo "Error: the working tree has uncommitted changes."
-    echo "Commit or stash them before releasing, so the release commit carries only the version bump."
-    exit 1
+    record_or_stop "the working tree has uncommitted changes" \
+        "Commit or stash them before releasing, so the release commit carries only the version bump."
+fi
+
+# The npm stage is the one that talks to the registry, so the mode that skips it skips these
+# checks too: its version is already published, which is the very thing they refuse.
+if [ "$PUBLISH_TO_NPMJS" = "true" ]; then
+    check_npm_preconditions "$DEPENDENCY_NAME" "$NEW_VERSION"
 fi
 
 echo "Releasing $DEPENDENCY_NAME $CURRENT_VERSION -> $NEW_VERSION (npm dist-tag: $DIST_TAG)"
@@ -215,7 +246,7 @@ if [ "$DRY_RUN_FLAG" = "--dry-run" ]; then
         echo "[dry-run] npm ci"
         echo "[dry-run] rm -rf dist"
         echo "[dry-run] npm publish --tag $DIST_TAG"
-        echo "[dry-run] sleep 120 to allow npm to replicate internally"
+        echo "[dry-run] wait for npm to serve $NEW_VERSION (up to ${NPM_PUBLISH_WAIT_TIMEOUT}s), then ${NPM_PUBLISH_SETTLE_SECONDS}s to allow npm to replicate internally"
         # --- end publish to npm ---
     fi
 
@@ -226,11 +257,17 @@ if [ "$DRY_RUN_FLAG" = "--dry-run" ]; then
         echo "[dry-run] git add ${#FILES_TO_COMMIT[@]} version files (package.json/package-lock.json of the project and of the samples)"
         echo "[dry-run] git commit -m \"Bump version to $NEW_VERSION\""
         echo "[dry-run] git tag v$NEW_VERSION"
-        echo "[dry-run] git push --atomic $RELEASE_REMOTE HEAD:refs/heads/${RELEASE_BRANCH:-<release-branch>} refs/tags/v$NEW_VERSION"
+        echo "[dry-run] git push --atomic ${RELEASE_REMOTE:-<release-remote>} HEAD:refs/heads/${RELEASE_BRANCH:-<release-branch>} refs/tags/v$NEW_VERSION"
         # --- end point the samples at the new version, commit, tag and push to github ---
     fi
 
     echo "[dry-run] nothing was published, committed or pushed"
+
+    if [ "$DRY_RUN_FINDINGS" -gt 0 ]; then
+        echo "[dry-run] $DRY_RUN_FINDINGS check(s) above would stop a real run; this clone is not ready to release"
+        exit 1
+    fi
+
     exit 0
 fi
 
@@ -258,9 +295,8 @@ if [ "$PUBLISH_TO_NPMJS" = "true" ]; then
 
     echo "Published $DEPENDENCY_NAME@$NEW_VERSION to npm under the \"$DIST_TAG\" tag"
 
-    # The samples install the version that was just published, so give npm time to replicate it.
-    echo "Sleeping 120 seconds to allow npm replicate internally"
-    sleep 120
+    # The samples install the version that was just published, so wait until npm serves it.
+    wait_for_published_version "$DEPENDENCY_NAME" "$NEW_VERSION"
     # --- end publish to npm ---
 fi
 
