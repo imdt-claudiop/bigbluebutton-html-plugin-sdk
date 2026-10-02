@@ -48,7 +48,7 @@
   "scripts": {
     "prepublishOnly": "npm run build # runs before publish",
     "build": "rm -rf dist/cjs && tsc --module CommonJS --outDir dist/cjs",
-    "build:watch": "rm -rf dist && tsc -w --module CommonJS",
+    "build:watch": "rm -rf dist/cjs && tsc -w --module CommonJS --outDir dist/cjs",
     "lint": "eslint . --ignore-pattern node_modules",
     "lint:fix": "npm run lint -- --fix",
     "lint:watch": "watch 'npm run lint'",
