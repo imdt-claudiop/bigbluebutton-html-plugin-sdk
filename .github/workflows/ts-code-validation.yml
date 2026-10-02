@@ -20,3 +20,15 @@ jobs:
         run: npm ci
       - name: typescript code validation with eslint
         run: npm run lint
+  scripts-validation:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Merge branches
+        uses: ./.github/actions/merge-branches
+      - name: Check shell script syntax
+        run: find scripts tests/core/scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+      - name: Run shellcheck
+        run: find scripts tests/core/scripts -name '*.sh' -print0 | xargs -0 shellcheck --severity=error
