@@ -29,6 +29,8 @@ jobs:
       - name: Merge branches
         uses: ./.github/actions/merge-branches
       - name: Check shell script syntax
+        shell: bash
         run: find scripts tests/core/scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Run shellcheck
+        shell: bash
         run: find scripts tests/core/scripts -name '*.sh' -print0 | xargs -0 shellcheck --severity=error
